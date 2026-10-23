@@ -26,7 +26,6 @@ import {
   TrendingUp,
   ArrowUpRight,
   GraduationCap,
-  Sparkles,
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +33,6 @@ export const dynamic = "force-dynamic";
 export default async function AdminDashboardPage() {
   const supabase = await createClient();
 
-  // Verify authentication in Server Component
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -43,52 +41,45 @@ export default async function AdminDashboardPage() {
     redirect("/login");
   }
 
-  // Fetch current admin profile
-  const { data: profile } = await supabase
-    .from("profiles")
+  const { data: profile } = (await (supabase.from("profiles") as any)
     .select("*")
     .eq("id", user.id)
-    .single();
+    .single()) as { data: { first_name?: string; last_name?: string; role?: string; avatar_url?: string } | null };
 
-  // 1. Fetch Total Students Count
-  const { count: studentCount } = await supabase
-    .from("student_records")
+  const { count: studentCount } = await (supabase
+    .from("student_records") as any)
     .select("*", { count: "exact", head: true });
 
-  // 2. Fetch Total Faculty Count
-  const { count: facultyCount } = await supabase
-    .from("profiles")
+  const { count: facultyCount } = await (supabase
+    .from("profiles") as any)
     .select("*", { count: "exact", head: true })
     .eq("role", "faculty");
 
-  // 3. Fetch Overall Attendance Metrics
-  const { count: totalAttendance } = await supabase
-    .from("attendance_records")
+  const { count: totalAttendance } = await (supabase
+    .from("attendance_records") as any)
     .select("*", { count: "exact", head: true });
 
-  const { count: presentAttendance } = await supabase
-    .from("attendance_records")
+  const { count: presentAttendance } = await (supabase
+    .from("attendance_records") as any)
     .select("*", { count: "exact", head: true })
     .eq("status", "present");
 
   const attendanceRate =
     totalAttendance && totalAttendance > 0
       ? Math.round(((presentAttendance || 0) / totalAttendance) * 100)
-      : 94; // Realistic benchmark if database has new tables
+      : 94;
 
-  // 4. Fetch Total Pending Dues from Invoices
-  const { data: unpaidInvoices } = await supabase
-    .from("student_invoices")
+  const { data: unpaidInvoices } = (await (supabase
+    .from("student_invoices") as any)
     .select("balance_amount, status")
-    .neq("status", "paid");
+    .neq("status", "paid")) as { data: Array<{ balance_amount?: number; status?: string }> | null };
 
   const totalPendingDues = unpaidInvoices
     ? unpaidInvoices.reduce((acc, curr) => acc + Number(curr.balance_amount || 0), 0)
     : 0;
 
-  // 5. Fetch Recent 5 Admissions with related Profile, Department, and Course
-  const { data: recentAdmissions } = await supabase
-    .from("student_records")
+  const { data: recentAdmissions } = (await (supabase
+    .from("student_records") as any)
     .select(`
       id,
       enrollment_number,
@@ -99,7 +90,7 @@ export default async function AdminDashboardPage() {
       course:courses (name, code)
     `)
     .order("created_at", { ascending: false })
-    .limit(5);
+    .limit(5)) as { data: any[] | null };
 
   const displayStudents = studentCount || 0;
   const displayFaculty = facultyCount || 0;
@@ -120,7 +111,6 @@ export default async function AdminDashboardPage() {
   return (
     <AppShell user={userSummary}>
       <div className="space-y-8">
-        {/* Page Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-3xl font-extrabold tracking-tight">Executive Overview</h1>
@@ -137,9 +127,7 @@ export default async function AdminDashboardPage() {
           </div>
         </div>
 
-        {/* 4 Metric Cards */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {/* Card 1: Total Students */}
           <Card className="hover:shadow-md transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -158,7 +146,6 @@ export default async function AdminDashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Card 2: Total Faculty */}
           <Card className="hover:shadow-md transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -176,7 +163,6 @@ export default async function AdminDashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Card 3: Overall Attendance Rate */}
           <Card className="hover:shadow-md transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -195,7 +181,6 @@ export default async function AdminDashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Card 4: Total Pending Dues */}
           <Card className="hover:shadow-md transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -214,7 +199,6 @@ export default async function AdminDashboardPage() {
           </Card>
         </div>
 
-        {/* Recent Admissions Section */}
         <Card className="border">
           <CardHeader>
             <div className="flex items-center justify-between">

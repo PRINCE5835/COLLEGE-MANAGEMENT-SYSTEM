@@ -40,7 +40,6 @@ import {
   GraduationCap,
   Users,
   CalendarCheck,
-  ReceiptCheck,
   CheckCircle2,
   Terminal,
   ExternalLink,
@@ -64,7 +63,6 @@ export default function HomePage() {
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-background via-background to-muted/20 pb-20">
-      {/* Top Navbar */}
       <header className="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="container flex h-16 items-center justify-between px-4 sm:px-8">
           <div className="flex items-center gap-3">
@@ -120,7 +118,6 @@ export default function HomePage() {
         </div>
       </header>
 
-      {/* Hero Section */}
       <section className="container px-4 sm:px-8 pt-12 pb-8">
         <div className="max-w-4xl space-y-4">
           <div className="inline-flex items-center gap-2 rounded-full border bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground">
@@ -135,7 +132,6 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Metrics Grid */}
       <section className="container px-4 sm:px-8 py-6">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Card className="hover:shadow-md transition-all">
@@ -182,7 +178,7 @@ export default function HomePage() {
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Financial Ledger
               </CardTitle>
-              <ReceiptCheck className="h-4 w-4 text-amber-500" />
+              <CheckCircle2 className="h-4 w-4 text-amber-500" />
             </CardHeader>
             <CardContent>
               <div className="text-3xl font-bold">Invoices & Fees</div>
@@ -192,9 +188,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Main Content: Database Schema Table & Interactive Components */}
       <section className="container px-4 sm:px-8 py-6 space-y-8">
-        {/* Schema Table */}
         <Card className="border">
           <CardHeader>
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -269,7 +263,6 @@ export default function HomePage() {
           </CardContent>
         </Card>
 
-        {/* Component Showcase Preview */}
         <div className="grid gap-6 md:grid-cols-2">
           <Card>
             <CardHeader>

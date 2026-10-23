@@ -1,18 +1,6 @@
--- ==============================================================================
--- ENTERPRISE COLLEGE MANAGEMENT SYSTEM (CMS) - SUPABASE DATABASE SCHEMA
--- Version: 1.0.0
--- Architecture: Multi-Role RBAC (Super Admin, Faculty, Student, Accountant)
--- Description: Complete production schema with Tables, Enums, Indexes,
---              Row-Level Security (RLS) policies, and Auth Triggers.
--- ==============================================================================
-
--- 0. ENABLE EXTENSIONS
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- ==============================================================================
--- 1. CUSTOM ENUMS
--- ==============================================================================
 DO $$ BEGIN
   CREATE TYPE public.user_role AS ENUM ('super_admin', 'faculty', 'student', 'accountant');
 EXCEPTION
@@ -31,11 +19,6 @@ EXCEPTION
   WHEN duplicate_object THEN null;
 END $$;
 
--- ==============================================================================
--- 2. HELPER FUNCTIONS FOR TIMESTAMPS & RBAC (Prevents RLS Recursion)
--- ==============================================================================
-
--- Auto-update updated_at timestamp
 CREATE OR REPLACE FUNCTION public.handle_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -44,7 +27,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Optimized security definer functions to inspect roles without recursive RLS lookups
 CREATE OR REPLACE FUNCTION public.get_current_user_role()
 RETURNS public.user_role
 LANGUAGE sql
@@ -117,11 +99,6 @@ AS $$
   SELECT id FROM public.student_records WHERE profile_id = auth.uid() LIMIT 1;
 $$;
 
--- ==============================================================================
--- 3. CORE APPLICATION TABLES
--- ==============================================================================
-
--- 3.1 PROFILES (Linked 1:1 with auth.users)
 CREATE TABLE IF NOT EXISTS public.profiles (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   role public.user_role NOT NULL DEFAULT 'student',
@@ -135,7 +112,8 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 3.2 DEPARTMENTS
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
+
 CREATE TABLE IF NOT EXISTS public.departments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   code text NOT NULL UNIQUE,
@@ -146,7 +124,6 @@ CREATE TABLE IF NOT EXISTS public.departments (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 3.3 COURSES (Degree programs under a department)
 CREATE TABLE IF NOT EXISTS public.courses (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   department_id uuid NOT NULL REFERENCES public.departments(id) ON DELETE CASCADE,
@@ -159,12 +136,11 @@ CREATE TABLE IF NOT EXISTS public.courses (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 3.4 SEMESTERS (Academic terms per course)
 CREATE TABLE IF NOT EXISTS public.semesters (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   course_id uuid NOT NULL REFERENCES public.courses(id) ON DELETE CASCADE,
   semester_number integer NOT NULL CHECK (semester_number >= 1),
-  academic_year text NOT NULL, -- e.g. '2025-2026'
+  academic_year text NOT NULL,
   start_date date NOT NULL,
   end_date date NOT NULL,
   is_current boolean NOT NULL DEFAULT false,
@@ -174,7 +150,6 @@ CREATE TABLE IF NOT EXISTS public.semesters (
   CONSTRAINT uq_course_semester_year UNIQUE (course_id, semester_number, academic_year)
 );
 
--- 3.5 SUBJECTS (Modules taught in a course/semester)
 CREATE TABLE IF NOT EXISTS public.subjects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   course_id uuid NOT NULL REFERENCES public.courses(id) ON DELETE CASCADE,
@@ -188,7 +163,6 @@ CREATE TABLE IF NOT EXISTS public.subjects (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 3.6 STUDENT RECORDS (Official academic & institutional data)
 CREATE TABLE IF NOT EXISTS public.student_records (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   profile_id uuid NOT NULL UNIQUE REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -206,7 +180,6 @@ CREATE TABLE IF NOT EXISTS public.student_records (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 3.7 SUBJECT ALLOCATIONS (Faculty assigned to subject/semester/section)
 CREATE TABLE IF NOT EXISTS public.subject_allocations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   subject_id uuid NOT NULL REFERENCES public.subjects(id) ON DELETE CASCADE,
@@ -219,7 +192,6 @@ CREATE TABLE IF NOT EXISTS public.subject_allocations (
   CONSTRAINT uq_allocation UNIQUE (subject_id, faculty_id, semester_id, section, academic_year)
 );
 
--- 3.8 ATTENDANCE SESSIONS (Class session created by faculty)
 CREATE TABLE IF NOT EXISTS public.attendance_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   allocation_id uuid NOT NULL REFERENCES public.subject_allocations(id) ON DELETE CASCADE,
@@ -227,13 +199,13 @@ CREATE TABLE IF NOT EXISTS public.attendance_sessions (
   start_time time NOT NULL,
   end_time time NOT NULL,
   topic text,
+  is_active boolean NOT NULL DEFAULT true,
   created_by uuid NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT chk_session_times CHECK (end_time > start_time)
 );
 
--- 3.9 ATTENDANCE RECORDS (Student attendance per session)
 CREATE TABLE IF NOT EXISTS public.attendance_records (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id uuid NOT NULL REFERENCES public.attendance_sessions(id) ON DELETE CASCADE,
@@ -244,7 +216,6 @@ CREATE TABLE IF NOT EXISTS public.attendance_records (
   CONSTRAINT uq_session_student UNIQUE (session_id, student_id)
 );
 
--- 3.10 FEE STRUCTURES (Course & semester fee definition)
 CREATE TABLE IF NOT EXISTS public.fee_structures (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   course_id uuid NOT NULL REFERENCES public.courses(id) ON DELETE CASCADE,
@@ -260,7 +231,6 @@ CREATE TABLE IF NOT EXISTS public.fee_structures (
   CONSTRAINT uq_fee_course_sem_year UNIQUE (course_id, semester_id, academic_year)
 );
 
--- 3.11 STUDENT INVOICES (Billing, fee tracking, and payment receipts)
 CREATE TABLE IF NOT EXISTS public.student_invoices (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   invoice_number text NOT NULL UNIQUE,
@@ -277,40 +247,30 @@ CREATE TABLE IF NOT EXISTS public.student_invoices (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- ==============================================================================
--- 4. B-TREE INDEXES FOR PERFORMANCE OPTIMIZATION
--- ==============================================================================
-
--- Profiles
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles(email);
 
--- Departments & Courses
 CREATE INDEX IF NOT EXISTS idx_departments_head ON public.departments(head_of_department_id);
 CREATE INDEX IF NOT EXISTS idx_courses_department ON public.courses(department_id);
 CREATE INDEX IF NOT EXISTS idx_courses_is_active ON public.courses(is_active);
 
--- Semesters & Subjects
 CREATE INDEX IF NOT EXISTS idx_semesters_course ON public.semesters(course_id);
 CREATE INDEX IF NOT EXISTS idx_semesters_current ON public.semesters(is_current);
 CREATE INDEX IF NOT EXISTS idx_subjects_course ON public.subjects(course_id);
 CREATE INDEX IF NOT EXISTS idx_subjects_department ON public.subjects(department_id);
 CREATE INDEX IF NOT EXISTS idx_subjects_sem_num ON public.subjects(semester_number);
 
--- Student Records
 CREATE INDEX IF NOT EXISTS idx_student_records_profile ON public.student_records(profile_id);
 CREATE INDEX IF NOT EXISTS idx_student_records_department ON public.student_records(department_id);
 CREATE INDEX IF NOT EXISTS idx_student_records_course ON public.student_records(course_id);
 CREATE INDEX IF NOT EXISTS idx_student_records_semester ON public.student_records(current_semester_id);
 CREATE INDEX IF NOT EXISTS idx_student_records_enrollment ON public.student_records(enrollment_number);
 
--- Subject Allocations
 CREATE INDEX IF NOT EXISTS idx_subject_allocations_subject ON public.subject_allocations(subject_id);
 CREATE INDEX IF NOT EXISTS idx_subject_allocations_faculty ON public.subject_allocations(faculty_id);
 CREATE INDEX IF NOT EXISTS idx_subject_allocations_semester ON public.subject_allocations(semester_id);
 CREATE INDEX IF NOT EXISTS idx_subject_allocations_academic_year ON public.subject_allocations(academic_year);
 
--- Attendance Sessions & Records
 CREATE INDEX IF NOT EXISTS idx_attendance_sessions_alloc ON public.attendance_sessions(allocation_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_sessions_date ON public.attendance_sessions(session_date);
 CREATE INDEX IF NOT EXISTS idx_attendance_sessions_creator ON public.attendance_sessions(created_by);
@@ -319,16 +279,12 @@ CREATE INDEX IF NOT EXISTS idx_attendance_records_student ON public.attendance_r
 CREATE INDEX IF NOT EXISTS idx_attendance_records_status ON public.attendance_records(status);
 CREATE INDEX IF NOT EXISTS idx_attendance_records_composite ON public.attendance_records(session_id, student_id, status);
 
--- Fees & Invoices
 CREATE INDEX IF NOT EXISTS idx_fee_structures_course_sem ON public.fee_structures(course_id, semester_id);
 CREATE INDEX IF NOT EXISTS idx_student_invoices_student ON public.student_invoices(student_id);
 CREATE INDEX IF NOT EXISTS idx_student_invoices_status ON public.student_invoices(status);
 CREATE INDEX IF NOT EXISTS idx_student_invoices_due_date ON public.student_invoices(due_date);
 CREATE INDEX IF NOT EXISTS idx_student_invoices_fee_struct ON public.student_invoices(fee_structure_id);
 
--- ==============================================================================
--- 5. UPDATED_AT TRIGGERS
--- ==============================================================================
 CREATE OR REPLACE TRIGGER trg_profiles_updated_at BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 CREATE OR REPLACE TRIGGER trg_departments_updated_at BEFORE UPDATE ON public.departments FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 CREATE OR REPLACE TRIGGER trg_courses_updated_at BEFORE UPDATE ON public.courses FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
@@ -340,9 +296,6 @@ CREATE OR REPLACE TRIGGER trg_attendance_sessions_updated_at BEFORE UPDATE ON pu
 CREATE OR REPLACE TRIGGER trg_fee_structures_updated_at BEFORE UPDATE ON public.fee_structures FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 CREATE OR REPLACE TRIGGER trg_student_invoices_updated_at BEFORE UPDATE ON public.student_invoices FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
--- ==============================================================================
--- 6. AUTH SIGNUP TRIGGER: AUTO-PROVISION PUBLIC.PROFILES
--- ==============================================================================
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger AS $$
 DECLARE
@@ -350,7 +303,6 @@ DECLARE
   v_first_name text;
   v_last_name text;
 BEGIN
-  -- Extract role from metadata or default to 'student'
   BEGIN
     v_role := COALESCE((NEW.raw_user_meta_data->>'role')::public.user_role, 'student'::public.user_role);
   EXCEPTION WHEN others THEN
@@ -395,17 +347,11 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
--- Drop existing trigger if needed and re-bind
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
--- ==============================================================================
--- 7. ROW LEVEL SECURITY (RLS) POLICIES
--- ==============================================================================
-
--- Enable RLS across all tables
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.departments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.courses ENABLE ROW LEVEL SECURITY;
@@ -418,45 +364,33 @@ ALTER TABLE public.attendance_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fee_structures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.student_invoices ENABLE ROW LEVEL SECURITY;
 
--- ------------------------------------------------------------------------------
--- 7.1 PROFILES POLICIES
--- ------------------------------------------------------------------------------
--- Super admin full CRUD
 CREATE POLICY "super_admin_manage_profiles"
   ON public.profiles FOR ALL
   TO authenticated
   USING (public.is_super_admin())
   WITH CHECK (public.is_super_admin());
 
--- Users read their own profile
 CREATE POLICY "users_read_own_profile"
   ON public.profiles FOR SELECT
   TO authenticated
   USING (id = auth.uid());
 
--- Users update their own editable profile details
 CREATE POLICY "users_update_own_profile"
   ON public.profiles FOR UPDATE
   TO authenticated
   USING (id = auth.uid())
   WITH CHECK (id = auth.uid());
 
--- Faculty & Accountants can view student and faculty profiles (Directory / Roster)
 CREATE POLICY "staff_read_profiles"
   ON public.profiles FOR SELECT
   TO authenticated
   USING (public.is_faculty() OR public.is_accountant());
 
--- Students can read faculty profiles (for finding instructors)
 CREATE POLICY "students_read_faculty_profiles"
   ON public.profiles FOR SELECT
   TO authenticated
   USING (public.is_student() AND role = 'faculty'::public.user_role);
 
--- ------------------------------------------------------------------------------
--- 7.2 ACADEMIC METADATA: DEPARTMENTS, COURSES, SEMESTERS, SUBJECTS
--- ------------------------------------------------------------------------------
--- Departments
 CREATE POLICY "super_admin_manage_departments"
   ON public.departments FOR ALL
   TO authenticated
@@ -468,7 +402,6 @@ CREATE POLICY "authenticated_read_departments"
   TO authenticated
   USING (true);
 
--- Courses
 CREATE POLICY "super_admin_manage_courses"
   ON public.courses FOR ALL
   TO authenticated
@@ -480,7 +413,6 @@ CREATE POLICY "authenticated_read_courses"
   TO authenticated
   USING (true);
 
--- Semesters
 CREATE POLICY "super_admin_manage_semesters"
   ON public.semesters FOR ALL
   TO authenticated
@@ -492,7 +424,6 @@ CREATE POLICY "authenticated_read_semesters"
   TO authenticated
   USING (true);
 
--- Subjects
 CREATE POLICY "super_admin_manage_subjects"
   ON public.subjects FOR ALL
   TO authenticated
@@ -504,51 +435,38 @@ CREATE POLICY "authenticated_read_subjects"
   TO authenticated
   USING (true);
 
--- ------------------------------------------------------------------------------
--- 7.3 STUDENT RECORDS POLICIES
--- ------------------------------------------------------------------------------
--- Super admin full CRUD
 CREATE POLICY "super_admin_manage_student_records"
   ON public.student_records FOR ALL
   TO authenticated
   USING (public.is_super_admin())
   WITH CHECK (public.is_super_admin());
 
--- Faculty can read student records (for grade books, roster, attendance)
 CREATE POLICY "faculty_read_student_records"
   ON public.student_records FOR SELECT
   TO authenticated
   USING (public.is_faculty());
 
--- Accountant can read student records (for billing and student lookups)
 CREATE POLICY "accountant_read_student_records"
   ON public.student_records FOR SELECT
   TO authenticated
   USING (public.is_accountant());
 
--- Students can view only their own record
 CREATE POLICY "students_read_own_record"
   ON public.student_records FOR SELECT
   TO authenticated
   USING (profile_id = auth.uid());
 
--- ------------------------------------------------------------------------------
--- 7.4 SUBJECT ALLOCATIONS POLICIES
--- ------------------------------------------------------------------------------
--- Super admin full CRUD
 CREATE POLICY "super_admin_manage_allocations"
   ON public.subject_allocations FOR ALL
   TO authenticated
   USING (public.is_super_admin())
   WITH CHECK (public.is_super_admin());
 
--- Faculty can view all allocations (or their own assigned subjects)
 CREATE POLICY "faculty_read_allocations"
   ON public.subject_allocations FOR SELECT
   TO authenticated
   USING (public.is_faculty());
 
--- Students can view allocations for their enrolled course subjects
 CREATE POLICY "students_read_allocations"
   ON public.subject_allocations FOR SELECT
   TO authenticated
@@ -561,17 +479,12 @@ CREATE POLICY "students_read_allocations"
     )
   );
 
--- ------------------------------------------------------------------------------
--- 7.5 ATTENDANCE SESSIONS POLICIES
--- ------------------------------------------------------------------------------
--- Super admin full CRUD
 CREATE POLICY "super_admin_manage_attendance_sessions"
   ON public.attendance_sessions FOR ALL
   TO authenticated
   USING (public.is_super_admin())
   WITH CHECK (public.is_super_admin());
 
--- Faculty can view sessions for allocations assigned to them
 CREATE POLICY "faculty_select_attendance_sessions"
   ON public.attendance_sessions FOR SELECT
   TO authenticated
@@ -583,7 +496,6 @@ CREATE POLICY "faculty_select_attendance_sessions"
     )
   );
 
--- Faculty can create sessions for their assigned subjects
 CREATE POLICY "faculty_insert_attendance_sessions"
   ON public.attendance_sessions FOR INSERT
   TO authenticated
@@ -597,7 +509,6 @@ CREATE POLICY "faculty_insert_attendance_sessions"
     )
   );
 
--- Faculty can update/delete their own sessions
 CREATE POLICY "faculty_update_own_sessions"
   ON public.attendance_sessions FOR UPDATE
   TO authenticated
@@ -608,7 +519,6 @@ CREATE POLICY "faculty_update_own_sessions"
     public.is_faculty() AND created_by = auth.uid()
   );
 
--- Students can view sessions for subjects in their course/semester
 CREATE POLICY "students_read_attendance_sessions"
   ON public.attendance_sessions FOR SELECT
   TO authenticated
@@ -621,17 +531,12 @@ CREATE POLICY "students_read_attendance_sessions"
     )
   );
 
--- ------------------------------------------------------------------------------
--- 7.6 ATTENDANCE RECORDS POLICIES
--- ------------------------------------------------------------------------------
--- Super admin full CRUD
 CREATE POLICY "super_admin_manage_attendance_records"
   ON public.attendance_records FOR ALL
   TO authenticated
   USING (public.is_super_admin())
   WITH CHECK (public.is_super_admin());
 
--- Faculty can view and record/update attendance for sessions of their allocated subjects
 CREATE POLICY "faculty_select_attendance_records"
   ON public.attendance_records FOR SELECT
   TO authenticated
@@ -676,7 +581,6 @@ CREATE POLICY "faculty_update_attendance_records"
     )
   );
 
--- Students can ONLY read their own attendance records
 CREATE POLICY "students_read_own_attendance_records"
   ON public.attendance_records FOR SELECT
   TO authenticated
@@ -684,33 +588,23 @@ CREATE POLICY "students_read_own_attendance_records"
     public.is_student() AND student_id = public.get_current_student_id()
   );
 
--- ------------------------------------------------------------------------------
--- 7.7 FEE STRUCTURES POLICIES
--- ------------------------------------------------------------------------------
--- Super admin & Accountant manage fee structures
 CREATE POLICY "admins_accountants_manage_fee_structures"
   ON public.fee_structures FOR ALL
   TO authenticated
   USING (public.is_super_admin() OR public.is_accountant())
   WITH CHECK (public.is_super_admin() OR public.is_accountant());
 
--- Faculty & Students can view active fee structures
 CREATE POLICY "authenticated_view_fee_structures"
   ON public.fee_structures FOR SELECT
   TO authenticated
   USING (true);
 
--- ------------------------------------------------------------------------------
--- 7.8 STUDENT INVOICES POLICIES
--- ------------------------------------------------------------------------------
--- Super admin & Accountant manage invoices
 CREATE POLICY "admins_accountants_manage_invoices"
   ON public.student_invoices FOR ALL
   TO authenticated
   USING (public.is_super_admin() OR public.is_accountant())
   WITH CHECK (public.is_super_admin() OR public.is_accountant());
 
--- Students can read-only access to their own invoices
 CREATE POLICY "students_read_own_invoices"
   ON public.student_invoices FOR SELECT
   TO authenticated

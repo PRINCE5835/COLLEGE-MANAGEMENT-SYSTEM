@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef } from "react";
+import { z } from "zod";
 import {
   Dialog,
   DialogTrigger,
@@ -20,6 +21,8 @@ import {
   Loader2,
   Download,
   X,
+  AlertTriangle,
+  Info,
 } from "lucide-react";
 import { bulkUploadStudents, BulkStudentRow } from "@/app/(admin)/students/actions";
 
@@ -40,48 +43,82 @@ const REQUIRED_HEADERS = [
   "email",
   "enrollment_number",
   "admission_year",
-];
+] as const;
+
+// Client-side Zod Schema for Row Data Integrity
+export const csvRowZodSchema = z.object({
+  first_name: z.string().trim().min(1, "First name is required"),
+  last_name: z.string().trim().min(1, "Last name is required"),
+  email: z.string().trim().email("Invalid email format"),
+  enrollment_number: z
+    .string()
+    .trim()
+    .min(3, "Enrollment number must be at least 3 characters")
+    .toUpperCase(),
+  admission_year: z.coerce
+    .number()
+    .int()
+    .min(2000, "Admission year must be >= 2000")
+    .max(2035, "Admission year must be <= 2035"),
+  course_code: z.string().trim().optional(),
+});
+
+interface RowValidationResult {
+  rowNumber: number;
+  data: BulkStudentRow;
+  isValid: boolean;
+  errors: string[];
+}
 
 export function BulkUploadModal({ courses, onSuccess }: BulkUploadModalProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
-  const [parsedRows, setParsedRows] = useState<BulkStudentRow[]>([]);
-  const [validationError, setValidationError] = useState<string | null>(null);
+  const [headerError, setHeaderError] = useState<string | null>(null);
+  const [validatedRows, setValidatedRows] = useState<RowValidationResult[]>([]);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [serverMessage, setServerMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedCourseId, setSelectedCourseId] = useState(courses[0]?.id || "");
+  const [showOnlyInvalid, setShowOnlyInvalid] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const resetState = () => {
     setFileName(null);
-    setParsedRows([]);
-    setValidationError(null);
+    setHeaderError(null);
+    setValidatedRows([]);
+    setServerError(null);
     setServerMessage(null);
+    setShowOnlyInvalid(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const parseCSV = (csvText: string) => {
-    const lines = csvText
-      .split(/\r\n|\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+  const validRows = validatedRows.filter((r) => r.isValid).map((r) => r.data);
+  const invalidRows = validatedRows.filter((r) => !r.isValid);
 
-    if (lines.length < 2) {
-      setValidationError("The uploaded CSV must contain a header row and at least one student record.");
+  const parseCSVContent = (csvText: string) => {
+    resetState();
+
+    const rawLines = csvText
+      .split(/\r\n|\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+
+    if (rawLines.length < 2) {
+      setHeaderError("The CSV file must contain a column header row followed by at least one student row.");
       return;
     }
 
-    const headers = lines[0]
+    // 1. Validate Header Row
+    const headers = rawLines[0]
       .split(",")
-      .map((h) => h.trim().toLowerCase().replace(/['"]/g, ""));
+      .map((h) => h.trim().toLowerCase().replace(/^["']|["']$/g, ""));
 
-    // Validate headers
     const missingHeaders = REQUIRED_HEADERS.filter((req) => !headers.includes(req));
     if (missingHeaders.length > 0) {
-      setValidationError(
-        `Missing required CSV column headers: ${missingHeaders.join(", ")}. Please check your file format.`
+      setHeaderError(
+        `Zod Header Validation Error: Missing required column(s): ${missingHeaders.join(", ")}. Please include all standard headers.`
       );
       return;
     }
@@ -91,36 +128,75 @@ export function BulkUploadModal({ courses, onSuccess }: BulkUploadModalProps) {
       headerIndices[h] = idx;
     });
 
-    const parsed: BulkStudentRow[] = [];
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(",").map((v) => v.trim().replace(/^["']|["']$/g, ""));
-      if (values.length < REQUIRED_HEADERS.length) continue;
+    // 2. Validate Row Data Integrity with Zod
+    const results: RowValidationResult[] = [];
+    const seenEnrollments = new Set<string>();
+    const seenEmails = new Set<string>();
 
-      parsed.push({
-        first_name: values[headerIndices["first_name"]],
-        last_name: values[headerIndices["last_name"]],
-        email: values[headerIndices["email"]],
-        enrollment_number: values[headerIndices["enrollment_number"]],
-        admission_year: values[headerIndices["admission_year"]],
-        course_code: headerIndices["course_code"] !== undefined ? values[headerIndices["course_code"]] : undefined,
+    for (let i = 1; i < rawLines.length; i++) {
+      const line = rawLines[i];
+      // Basic CSV field parser supporting simple quoted strings
+      const values = line.split(",").map((v) => v.trim().replace(/^["']|["']$/g, ""));
+      if (values.length < REQUIRED_HEADERS.length && values.every((v) => v === "")) {
+        continue;
+      }
+
+      const rawRow = {
+        first_name: values[headerIndices["first_name"]] || "",
+        last_name: values[headerIndices["last_name"]] || "",
+        email: values[headerIndices["email"]] || "",
+        enrollment_number: values[headerIndices["enrollment_number"]] || "",
+        admission_year: values[headerIndices["admission_year"]] || "",
+        course_code:
+          headerIndices["course_code"] !== undefined ? values[headerIndices["course_code"]] : undefined,
+      };
+
+      const parseResult = csvRowZodSchema.safeParse(rawRow);
+      const rowErrors: string[] = [];
+
+      if (!parseResult.success) {
+        parseResult.error.issues.forEach((err) => {
+          rowErrors.push(`${err.path.join(".")}: ${err.message}`);
+        });
+      }
+
+      const enr = rawRow.enrollment_number.trim().toUpperCase();
+      const em = rawRow.email.trim().toLowerCase();
+
+      if (enr && seenEnrollments.has(enr)) {
+        rowErrors.push(`Duplicate enrollment number within CSV: ${enr}`);
+      } else if (enr) {
+        seenEnrollments.add(enr);
+      }
+
+      if (em && seenEmails.has(em)) {
+        rowErrors.push(`Duplicate email within CSV: ${em}`);
+      } else if (em) {
+        seenEmails.add(em);
+      }
+
+      results.push({
+        rowNumber: i + 1,
+        data: rawRow,
+        isValid: rowErrors.length === 0,
+        errors: rowErrors,
       });
     }
 
-    if (parsed.length === 0) {
-      setValidationError("No valid student rows could be parsed from the CSV.");
+    if (results.length === 0) {
+      setHeaderError("No valid data rows found in uploaded CSV.");
       return;
     }
 
-    setParsedRows(parsed);
-    setValidationError(null);
+    setValidatedRows(results);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.endsWith(".csv")) {
-      setValidationError("Please upload a valid .csv file.");
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setHeaderError("Only .csv files are supported. Please select a valid CSV.");
       return;
     }
 
@@ -128,7 +204,7 @@ export function BulkUploadModal({ courses, onSuccess }: BulkUploadModalProps) {
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
-      parseCSV(content);
+      parseCSVContent(content);
     };
     reader.readAsText(file);
   };
@@ -140,8 +216,8 @@ export function BulkUploadModal({ courses, onSuccess }: BulkUploadModalProps) {
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
 
-    if (!file.name.endsWith(".csv")) {
-      setValidationError("Please upload a valid .csv file.");
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setHeaderError("Only .csv files are supported. Please select a valid CSV.");
       return;
     }
 
@@ -149,46 +225,45 @@ export function BulkUploadModal({ courses, onSuccess }: BulkUploadModalProps) {
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
-      parseCSV(content);
+      parseCSVContent(content);
     };
     reader.readAsText(file);
   };
 
   const handleUploadSubmit = async () => {
-    if (parsedRows.length === 0) return;
+    if (validRows.length === 0) return;
 
     setIsSubmitting(true);
-    setValidationError(null);
+    setServerError(null);
     setServerMessage(null);
 
-    const res = await bulkUploadStudents(parsedRows, selectedCourseId);
+    const res = await bulkUploadStudents(validRows, selectedCourseId);
 
     setIsSubmitting(false);
 
     if (res.error) {
-      setValidationError(res.error);
+      setServerError(res.error);
     } else {
-      setServerMessage(res.message || "Bulk import completed!");
+      setServerMessage(res.message || "Bulk import processed successfully!");
       setTimeout(() => {
         setIsOpen(false);
         resetState();
         if (onSuccess) onSuccess();
-      }, 2000);
+      }, 1800);
     }
   };
 
   const downloadSampleCSV = () => {
     const csvContent =
+      "data:text/csv;charset=utf-8," +
       "first_name,last_name,email,enrollment_number,admission_year,course_code\n" +
-      "Alice,Smith,alice.smith@college.edu,STU2025001,2025,BTECH-CS\n" +
-      "Bob,Johnson,bob.j@college.edu,STU2025002,2025,BTECH-CS\n" +
-      "Charlie,Brown,charlie.b@college.edu,STU2025003,2025,BTECH-CS";
-
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
+      "Alice,Johnson,alice.johnson@college.edu,STU20250091,2025,BTECH-CSE\n" +
+      "Bob,Smith,bob.smith@college.edu,STU20250092,2025,BTECH-ME\n" +
+      "Charlie,Davis,charlie.davis@college.edu,STU20250093,2025,BTECH-CSE\n";
+    const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", "student_bulk_template.csv");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "student_bulk_sample.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -203,48 +278,33 @@ export function BulkUploadModal({ courses, onSuccess }: BulkUploadModalProps) {
       }}
     >
       <DialogTrigger asChild>
-        <Button variant="outline" className="gap-2">
-          <UploadCloud className="h-4 w-4" /> Bulk Upload CSV
+        <Button variant="outline" className="gap-2 shadow-sm font-medium">
+          <UploadCloud className="h-4 w-4" /> Bulk CSV Upload
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <div className="flex items-center justify-between pr-4">
-            <DialogTitle className="flex items-center gap-2">
-              <FileSpreadsheet className="h-5 w-5 text-primary" /> Batch Student Enrollment
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              <UploadCloud className="h-5 w-5 text-primary" /> Batch Student Ingestion
             </DialogTitle>
             <Button
-              type="button"
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={downloadSampleCSV}
-              className="text-xs text-primary gap-1.5 h-8"
+              className="gap-1.5 text-xs h-7 text-muted-foreground hover:text-foreground"
             >
               <Download className="h-3.5 w-3.5" /> Sample CSV
             </Button>
           </div>
           <DialogDescription>
-            Import multiple students simultaneously via CSV format.
+            Import multiple students via CSV with client-side Zod validation and transaction rollback safety.
           </DialogDescription>
         </DialogHeader>
 
-        {validationError && (
-          <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-            <span>{validationError}</span>
-          </div>
-        )}
-
-        {serverMessage && (
-          <div className="flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400">
-            <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
-            <span>{serverMessage}</span>
-          </div>
-        )}
-
-        <div className="space-y-4 py-2">
-          {/* Target Course Select */}
+        <div className="space-y-4 py-2 overflow-y-auto flex-1 pr-1">
+          {/* Default Course Selection */}
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-foreground/80">
               Default Degree Program
@@ -262,11 +322,38 @@ export function BulkUploadModal({ courses, onSuccess }: BulkUploadModalProps) {
               ))}
             </select>
             <p className="text-[11px] text-muted-foreground">
-              Used if student rows do not specify an individual <code className="font-mono">course_code</code>.
+              Applied automatically if an individual CSV row omits a specific <code className="font-mono">course_code</code>.
             </p>
           </div>
 
-          {/* Drag & Drop Zone */}
+          {/* Header Error Alert */}
+          {headerError && (
+            <div className="flex items-start gap-2.5 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">{headerError}</span>
+            </div>
+          )}
+
+          {/* Server Error Alert (Transaction Rollback Notice) */}
+          {serverError && (
+            <div className="flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="font-semibold block">Batch Insertion Aborted:</span>
+                <span className="leading-relaxed block">{serverError}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Server Success Banner */}
+          {serverMessage && (
+            <div className="flex items-start gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400">
+              <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">{serverMessage}</span>
+            </div>
+          )}
+
+          {/* Dropzone */}
           <div
             onDragOver={(e) => {
               e.preventDefault();
@@ -275,10 +362,10 @@ export function BulkUploadModal({ courses, onSuccess }: BulkUploadModalProps) {
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
+            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
               isDragging
-                ? "border-primary bg-primary/5"
-                : "border-muted hover:border-primary/50 hover:bg-muted/30"
+                ? "border-primary bg-primary/10 scale-[0.99]"
+                : "border-muted-foreground/30 hover:border-primary/50 hover:bg-muted/20"
             }`}
           >
             <input
@@ -289,62 +376,133 @@ export function BulkUploadModal({ courses, onSuccess }: BulkUploadModalProps) {
               className="hidden"
             />
             <div className="flex flex-col items-center justify-center space-y-2">
-              <div className="h-12 w-12 rounded-full bg-primary/10 text-primary flex items-center justify-center">
-                <UploadCloud className="h-6 w-6" />
+              <div className="h-10 w-10 rounded-full bg-primary/10 text-primary flex items-center justify-center">
+                <UploadCloud className="h-5 w-5" />
               </div>
               <div className="text-sm font-semibold text-foreground">
-                Click to browse or drag & drop CSV file
+                Click to browse or drop CSV file here
               </div>
-              <p className="text-xs text-muted-foreground max-w-xs">
-                Headers required: <span className="font-mono text-foreground font-semibold">first_name, last_name, email, enrollment_number, admission_year</span>
+              <p className="text-xs text-muted-foreground">
+                Required columns:{" "}
+                <span className="font-mono text-foreground font-medium">
+                  first_name, last_name, email, enrollment_number, admission_year
+                </span>
               </p>
             </div>
           </div>
 
-          {/* Parsed Preview File Details */}
+          {/* Uploaded File Bar */}
           {fileName && (
-            <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30 text-xs">
+            <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/40 text-xs">
               <div className="flex items-center gap-2 overflow-hidden">
                 <FileSpreadsheet className="h-4 w-4 text-emerald-500 shrink-0" />
-                <span className="font-mono truncate">{fileName}</span>
-                <Badge variant="secondary" className="shrink-0 text-[10px]">
-                  {parsedRows.length} Records Found
-                </Badge>
+                <span className="font-mono font-medium truncate">{fileName}</span>
               </div>
-              <button
-                type="button"
-                onClick={resetState}
-                className="text-muted-foreground hover:text-foreground p-1"
-                title="Remove file"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="text-[11px] font-mono">
+                  {validatedRows.length} Rows
+                </Badge>
+                <button
+                  type="button"
+                  onClick={resetState}
+                  className="text-muted-foreground hover:text-foreground p-1 transition-colors"
+                  title="Remove file"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Preview Table for first 3 rows */}
-          {parsedRows.length > 0 && (
-            <div className="rounded-lg border overflow-hidden">
-              <div className="bg-muted/40 px-3 py-1.5 text-[11px] font-semibold text-muted-foreground border-b flex justify-between">
-                <span>Data Sample Preview</span>
-                <span>Showing first {Math.min(parsedRows.length, 3)} of {parsedRows.length} rows</span>
+          {/* Zod Validation Summary & Table Preview */}
+          {validatedRows.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-foreground">Validation Integrity:</span>
+                  <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
+                    {validRows.length} Valid
+                  </Badge>
+                  {invalidRows.length > 0 && (
+                    <Badge variant="destructive" className="text-[11px]">
+                      {invalidRows.length} Invalid
+                    </Badge>
+                  )}
+                </div>
+
+                {invalidRows.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowOnlyInvalid(!showOnlyInvalid)}
+                    className="text-primary hover:underline text-xs"
+                  >
+                    {showOnlyInvalid ? "Show all rows" : `Filter ${invalidRows.length} errors`}
+                  </button>
+                )}
               </div>
-              <div className="max-h-32 overflow-y-auto text-xs divide-y">
-                {parsedRows.slice(0, 3).map((row, idx) => (
-                  <div key={idx} className="p-2.5 flex items-center justify-between gap-4 font-mono">
-                    <span className="font-semibold text-foreground truncate">
-                      {row.first_name} {row.last_name}
-                    </span>
-                    <span className="text-primary truncate">{row.enrollment_number}</span>
-                    <span className="text-muted-foreground truncate">{row.email}</span>
+
+              {/* Invalid Rows Warning Box */}
+              {invalidRows.length > 0 && (
+                <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-xs space-y-1.5 max-h-36 overflow-y-auto">
+                  <div className="flex items-center gap-1.5 font-semibold text-destructive">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    <span>Zod Validation Errors ({invalidRows.length} row(s) cannot be uploaded):</span>
                   </div>
-                ))}
+                  <ul className="list-disc pl-5 space-y-0.5 text-muted-foreground">
+                    {invalidRows.map((inv) => (
+                      <li key={inv.rowNumber}>
+                        <span className="font-mono text-foreground font-semibold">Row {inv.rowNumber}</span>:{" "}
+                        {inv.errors.join("; ")}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Data Preview Table */}
+              <div className="rounded-lg border overflow-hidden">
+                <div className="bg-muted/50 px-3 py-2 text-[11px] font-semibold text-muted-foreground border-b flex justify-between items-center">
+                  <span>Student Preview ({showOnlyInvalid ? invalidRows.length : validatedRows.length} records)</span>
+                  <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <Info className="h-3 w-3" /> Transaction rollback active on batch failure
+                  </span>
+                </div>
+                <div className="max-h-48 overflow-y-auto text-xs divide-y">
+                  {(showOnlyInvalid ? invalidRows : validatedRows).map((row) => (
+                    <div
+                      key={row.rowNumber}
+                      className={`p-2.5 flex items-center justify-between gap-3 text-xs font-mono ${
+                        row.isValid ? "hover:bg-muted/30" : "bg-destructive/5"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <span className="text-[10px] text-muted-foreground w-6">#{row.rowNumber}</span>
+                        <span className="font-semibold text-foreground truncate">
+                          {row.data.first_name} {row.data.last_name}
+                        </span>
+                      </div>
+                      <span className="text-primary font-medium truncate">{row.data.enrollment_number}</span>
+                      <span className="text-muted-foreground truncate hidden sm:inline">{row.data.email}</span>
+                      <div>
+                        {row.isValid ? (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                            Ready
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-destructive/10 text-destructive">
+                            Invalid
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
         </div>
 
-        <DialogFooter className="pt-2">
+        <DialogFooter className="pt-3 border-t">
           <Button
             type="button"
             variant="outline"
@@ -356,15 +514,15 @@ export function BulkUploadModal({ courses, onSuccess }: BulkUploadModalProps) {
           <Button
             type="button"
             onClick={handleUploadSubmit}
-            disabled={isSubmitting || parsedRows.length === 0}
-            className="gap-2"
+            disabled={isSubmitting || validRows.length === 0}
+            className="gap-2 min-w-[150px]"
           >
             {isSubmitting ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" /> Batch Processing...
               </>
             ) : (
-              `Import ${parsedRows.length > 0 ? `${parsedRows.length} Students` : ""}`
+              `Import ${validRows.length} Student${validRows.length === 1 ? "" : "s"}`
             )}
           </Button>
         </DialogFooter>

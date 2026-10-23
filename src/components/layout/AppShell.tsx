@@ -31,7 +31,6 @@ import {
   Receipt,
   BookOpen,
   CalendarCheck,
-  QrCode,
   LogOut,
   Menu,
   Sun,
@@ -39,7 +38,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Shield,
-  Layers,
+  QrCode,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -63,7 +62,6 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
-// Navigation structure dynamically filtered per role
 const ROLE_NAVIGATION: Record<UserRole, NavItem[]> = {
   super_admin: [
     { title: "Overview", href: "/admin/dashboard", icon: LayoutDashboard },
@@ -81,6 +79,7 @@ const ROLE_NAVIGATION: Record<UserRole, NavItem[]> = {
     { title: "Overview", href: "/student/dashboard", icon: LayoutDashboard },
     { title: "My Attendance", href: "/student/attendance", icon: CalendarCheck },
     { title: "Fee Receipts", href: "/student/invoices", icon: Receipt },
+    { title: "QR Check-in", href: "/student/scan", icon: QrCode },
   ],
   accountant: [
     { title: "Overview", href: "/admin/dashboard", icon: LayoutDashboard },
@@ -89,7 +88,10 @@ const ROLE_NAVIGATION: Record<UserRole, NavItem[]> = {
   ],
 };
 
-const ROLE_BADGE_CONFIG: Record<UserRole, { label: string; variant: "default" | "destructive" | "secondary" | "success" | "warning" | "info" }> = {
+const ROLE_BADGE_CONFIG: Record<
+  UserRole,
+  { label: string; variant: "default" | "destructive" | "secondary" | "success" | "warning" | "info" }
+> = {
   super_admin: { label: "Super Admin", variant: "destructive" },
   faculty: { label: "Faculty", variant: "info" },
   student: { label: "Student", variant: "success" },
@@ -102,7 +104,6 @@ export function AppShell({ user, children }: AppShellProps) {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
 
-  // Initialize theme from document or localStorage
   useEffect(() => {
     const isDark = document.documentElement.classList.contains("dark");
     setIsDarkMode(isDark);
@@ -125,54 +126,66 @@ export function AppShell({ user, children }: AppShellProps) {
   const displayName = user.first_name
     ? `${user.first_name} ${user.last_name || ""}`.trim()
     : user.email.split("@")[0];
+  const userInitial = displayName.charAt(0).toUpperCase();
 
   return (
     <div className="min-h-screen flex bg-background text-foreground">
-      {/* 1. Desktop Collapsible Sidebar */}
+      {/* Desktop Collapsible Sidebar */}
       <aside
         className={cn(
-          "hidden md:flex flex-col border-r bg-card/60 backdrop-blur-sm transition-all duration-300 relative z-30",
+          "hidden md:flex flex-col border-r bg-card/70 backdrop-blur-md transition-all duration-300 relative z-30 shrink-0",
           isCollapsed ? "w-20" : "w-64"
         )}
       >
-        {/* Brand Logo Header */}
+        {/* Header / Brand */}
         <div className="h-16 flex items-center px-4 border-b justify-between">
-          <Link href="/" className="flex items-center gap-3 overflow-hidden">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm shadow-primary/25">
+          <Link href="/" className="flex items-center gap-3 overflow-hidden group">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/25 group-hover:scale-105 transition-transform">
               <GraduationCap className="h-6 w-6" />
             </div>
             {!isCollapsed && (
               <div className="flex flex-col min-w-0">
-                <span className="font-bold text-base tracking-tight truncate">AcademiaCore</span>
-                <span className="text-[10px] text-muted-foreground uppercase font-mono tracking-wider">Enterprise CMS</span>
+                <span className="font-bold text-base tracking-tight truncate text-foreground">
+                  AcademiaCore
+                </span>
+                <span className="text-[10px] text-muted-foreground uppercase font-mono tracking-wider">
+                  Enterprise ERP
+                </span>
               </div>
             )}
           </Link>
 
-          {/* Collapse Toggle Button */}
           <button
             onClick={() => setIsCollapsed(!isCollapsed)}
-            className="hidden lg:flex h-7 w-7 items-center justify-center rounded-md border bg-background text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            className="hidden lg:flex h-7 w-7 items-center justify-center rounded-md border border-border/80 bg-background text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
-            {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+            {isCollapsed ? (
+              <ChevronRight className="h-4 w-4" />
+            ) : (
+              <ChevronLeft className="h-4 w-4" />
+            )}
           </button>
         </div>
 
-        {/* Role Persona Tag */}
+        {/* Role Badge Indicator */}
         {!isCollapsed && (
-          <div className="px-4 py-3 border-b bg-muted/20 flex items-center justify-between">
-            <span className="text-xs font-semibold text-muted-foreground uppercase">Access Level</span>
-            <Badge variant={badgeConfig.variant} className="text-[10px] font-medium">
+          <div className="px-4 py-2.5 border-b bg-muted/20 flex items-center justify-between">
+            <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+              Access Tier
+            </span>
+            <Badge variant={badgeConfig.variant} className="text-[10px] font-medium px-2 py-0.5">
               {badgeConfig.label}
             </Badge>
           </div>
         )}
 
-        {/* Dynamic Navigation Links */}
+        {/* Navigation Items */}
         <nav className="flex-1 px-3 py-4 space-y-1.5 overflow-y-auto">
           {navItems.map((item) => {
-            const isActive = pathname === item.href || (item.href !== "/admin/dashboard" && pathname.startsWith(item.href));
+            const isActive =
+              pathname === item.href ||
+              (item.href !== "/admin/dashboard" && pathname.startsWith(item.href));
             const Icon = item.icon;
 
             return (
@@ -182,7 +195,7 @@ export function AppShell({ user, children }: AppShellProps) {
                 className={cn(
                   "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 group",
                   isActive
-                    ? "bg-primary text-primary-foreground shadow-sm"
+                    ? "bg-primary text-primary-foreground shadow-sm shadow-primary/20"
                     : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
                 )}
                 title={isCollapsed ? item.title : undefined}
@@ -190,7 +203,9 @@ export function AppShell({ user, children }: AppShellProps) {
                 <Icon
                   className={cn(
                     "h-5 w-5 shrink-0 transition-transform group-hover:scale-105",
-                    isActive ? "text-primary-foreground" : "text-muted-foreground group-hover:text-foreground"
+                    isActive
+                      ? "text-primary-foreground"
+                      : "text-muted-foreground group-hover:text-foreground"
                   )}
                 />
                 {!isCollapsed && <span className="truncate">{item.title}</span>}
@@ -199,20 +214,30 @@ export function AppShell({ user, children }: AppShellProps) {
           })}
         </nav>
 
-        {/* User Profile Mini Footer */}
+        {/* User Card in Sidebar Footer */}
         <div className="p-3 border-t bg-muted/10">
           <div
             className={cn(
-              "flex items-center gap-3 p-2 rounded-lg bg-card border",
+              "flex items-center gap-3 p-2 rounded-lg bg-card border border-border/80 shadow-xs",
               isCollapsed && "justify-center p-1.5"
             )}
           >
-            <div className="h-8 w-8 shrink-0 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs uppercase border border-primary/20">
-              {displayName.charAt(0)}
-            </div>
+            {user.avatar_url ? (
+              <img
+                src={user.avatar_url}
+                alt={displayName}
+                className="h-8 w-8 shrink-0 rounded-full object-cover border border-border"
+              />
+            ) : (
+              <div className="h-8 w-8 shrink-0 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs uppercase border border-primary/20">
+                {userInitial}
+              </div>
+            )}
             {!isCollapsed && (
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-foreground truncate leading-tight">{displayName}</p>
+                <p className="text-xs font-semibold text-foreground truncate leading-tight">
+                  {displayName}
+                </p>
                 <p className="text-[11px] text-muted-foreground truncate">{user.email}</p>
               </div>
             )}
@@ -220,12 +245,11 @@ export function AppShell({ user, children }: AppShellProps) {
         </div>
       </aside>
 
-      {/* 2. Main Content Area */}
+      {/* Main Content Area with Top Navbar */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Top Navbar */}
-        <header className="sticky top-0 z-20 h-16 border-b bg-card/80 backdrop-blur supports-[backdrop-filter]:bg-card/60 flex items-center justify-between px-4 sm:px-8">
+        <header className="sticky top-0 z-20 h-16 border-b bg-card/80 backdrop-blur-md supports-[backdrop-filter]:bg-card/60 flex items-center justify-between px-4 sm:px-8">
           <div className="flex items-center gap-3">
-            {/* Mobile Sheet Menu Trigger */}
+            {/* Mobile Sheet Menu */}
             <Sheet open={isMobileOpen} onOpenChange={setIsMobileOpen}>
               <SheetTrigger asChild>
                 <Button variant="outline" size="icon" className="md:hidden h-9 w-9">
@@ -235,17 +259,21 @@ export function AppShell({ user, children }: AppShellProps) {
               </SheetTrigger>
               <SheetContent side="left" className="w-72 p-0 flex flex-col">
                 <SheetHeader className="h-16 px-6 border-b flex flex-row items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
                     <GraduationCap className="h-5 w-5" />
                   </div>
                   <div className="text-left">
                     <SheetTitle className="text-base font-bold">AcademiaCore</SheetTitle>
-                    <span className="text-[10px] text-muted-foreground uppercase font-mono">Enterprise CMS</span>
+                    <span className="text-[10px] text-muted-foreground uppercase font-mono">
+                      Enterprise ERP
+                    </span>
                   </div>
                 </SheetHeader>
 
                 <div className="px-4 py-3 border-b bg-muted/20 flex items-center justify-between">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase">Portal Role</span>
+                  <span className="text-xs font-semibold text-muted-foreground uppercase">
+                    Portal Role
+                  </span>
                   <Badge variant={badgeConfig.variant} className="text-[10px]">
                     {badgeConfig.label}
                   </Badge>
@@ -253,7 +281,9 @@ export function AppShell({ user, children }: AppShellProps) {
 
                 <nav className="flex-1 px-4 py-4 space-y-1.5 overflow-y-auto">
                   {navItems.map((item) => {
-                    const isActive = pathname === item.href || (item.href !== "/admin/dashboard" && pathname.startsWith(item.href));
+                    const isActive =
+                      pathname === item.href ||
+                      (item.href !== "/admin/dashboard" && pathname.startsWith(item.href));
                     const Icon = item.icon;
 
                     return (
@@ -264,7 +294,7 @@ export function AppShell({ user, children }: AppShellProps) {
                         className={cn(
                           "flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors",
                           isActive
-                            ? "bg-primary text-primary-foreground"
+                            ? "bg-primary text-primary-foreground shadow-sm"
                             : "text-muted-foreground hover:bg-muted hover:text-foreground"
                         )}
                       >
@@ -277,7 +307,7 @@ export function AppShell({ user, children }: AppShellProps) {
 
                 <div className="p-4 border-t">
                   <form action={signOut}>
-                    <Button variant="destructive" className="w-full gap-2">
+                    <Button variant="destructive" className="w-full gap-2 text-xs">
                       <LogOut className="h-4 w-4" /> Sign Out
                     </Button>
                   </form>
@@ -286,32 +316,44 @@ export function AppShell({ user, children }: AppShellProps) {
             </Sheet>
 
             <span className="text-sm font-semibold text-muted-foreground hidden sm:inline-block">
-              Institutional Management Portal
+              AcademiaCore Academic Enterprise System
             </span>
           </div>
 
-          {/* Right Action Icons: Theme Toggle & Profile Dropdown */}
+          {/* Top Navbar Actions: Dark/Light Mode Toggle + User Menu */}
           <div className="flex items-center gap-3">
-            {/* Theme Toggle Button */}
+            {/* Theme Toggle */}
             <Button
               variant="outline"
               size="icon"
               onClick={toggleTheme}
-              className="h-9 w-9 rounded-lg"
+              className="h-9 w-9 rounded-lg border-border/80 hover:bg-muted transition-colors"
               title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
             >
-              {isDarkMode ? <Sun className="h-4 w-4 text-amber-400" /> : <Moon className="h-4 w-4 text-slate-700" />}
+              {isDarkMode ? (
+                <Sun className="h-4 w-4 text-amber-400 transition-transform rotate-0" />
+              ) : (
+                <Moon className="h-4 w-4 text-slate-700 transition-transform rotate-0" />
+              )}
               <span className="sr-only">Toggle theme</span>
             </Button>
 
-            {/* Profile Menu & Working Logout */}
+            {/* Profile Dropdown with Avatar and Logout */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-2 p-1 pl-2 pr-3 rounded-full border bg-background hover:bg-muted/60 transition-colors">
-                  <div className="h-7 w-7 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs">
-                    {displayName.charAt(0)}
-                  </div>
-                  <span className="text-xs font-medium max-w-[120px] truncate hidden sm:inline-block">
+                <button className="flex items-center gap-2 p-1 pl-2 pr-3 rounded-full border border-border/80 bg-background hover:bg-muted/60 transition-colors focus:outline-none focus:ring-2 focus:ring-primary/20">
+                  {user.avatar_url ? (
+                    <img
+                      src={user.avatar_url}
+                      alt={displayName}
+                      className="h-7 w-7 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-7 w-7 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs">
+                      {userInitial}
+                    </div>
+                  )}
+                  <span className="text-xs font-medium max-w-[120px] truncate hidden sm:inline-block text-foreground">
                     {displayName}
                   </span>
                 </button>
@@ -319,8 +361,12 @@ export function AppShell({ user, children }: AppShellProps) {
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuLabel>
                   <div className="flex flex-col space-y-1">
-                    <p className="text-sm font-medium leading-none">{displayName}</p>
-                    <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
+                    <p className="text-sm font-medium leading-none text-foreground">
+                      {displayName}
+                    </p>
+                    <p className="text-xs leading-none text-muted-foreground truncate">
+                      {user.email}
+                    </p>
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />

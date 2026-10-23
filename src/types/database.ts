@@ -382,6 +382,7 @@ export interface Database {
           start_time: string;
           end_time: string;
           topic: string | null;
+          is_active: boolean;
           created_by: string;
           created_at: string;
           updated_at: string;
@@ -393,6 +394,7 @@ export interface Database {
           start_time: string;
           end_time: string;
           topic?: string | null;
+          is_active?: boolean;
           created_by: string;
           created_at?: string;
           updated_at?: string;
@@ -404,6 +406,7 @@ export interface Database {
           start_time?: string;
           end_time?: string;
           topic?: string | null;
+          is_active?: boolean;
           created_by?: string;
           created_at?: string;
           updated_at?: string;
@@ -627,9 +630,6 @@ export interface Database {
   };
 }
 
-// ------------------------------------------------------------------------------
-// Convenience Entity Types
-// ------------------------------------------------------------------------------
 export type Tables<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Row'];
 export type Inserts<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Insert'];
 export type Updates<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Update'];
@@ -646,9 +646,6 @@ export type AttendanceRecord = Tables<'attendance_records'>;
 export type FeeStructure = Tables<'fee_structures'>;
 export type StudentInvoice = Tables<'student_invoices'>;
 
-// ------------------------------------------------------------------------------
-// Joined / Relationship Model Types
-// ------------------------------------------------------------------------------
 export interface StudentRecordWithDetails extends StudentRecord {
   profile: Profile;
   department: Department;

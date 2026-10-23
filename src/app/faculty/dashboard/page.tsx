@@ -24,11 +24,10 @@ export default async function FacultyDashboardPage() {
     redirect("/login");
   }
 
-  const { data: profile } = await supabase
-    .from("profiles")
+  const { data: profile } = (await (supabase.from("profiles") as any)
     .select("*")
     .eq("id", user.id)
-    .single();
+    .single()) as { data: { first_name?: string; last_name?: string; role?: string; avatar_url?: string } | null };
 
   const userSummary = {
     id: user.id,

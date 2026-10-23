@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { Database, UserRole } from "@/types/database";
 
@@ -9,20 +9,33 @@ const ROLE_DASHBOARDS: Record<UserRole, string> = {
   accountant: "/admin/dashboard",
 };
 
+interface CookieToSet {
+  name: string;
+  value: string;
+  options?: CookieOptions;
+}
+
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   });
 
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return supabaseResponse;
+  }
+
   const supabase = createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: CookieToSet[]) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
@@ -37,21 +50,19 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // Authenticate user securely using getUser() (refreshes stale auth tokens)
+  // Refresh auth session
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
 
-  const isAuthRoute = pathname.startsWith("/login");
-  const isProtectedAdmin = pathname.startsWith("/admin");
-  const isProtectedFaculty = pathname.startsWith("/faculty");
-  const isProtectedStudent = pathname.startsWith("/student");
-  const isProtectedRoute =
-    isProtectedAdmin || isProtectedFaculty || isProtectedStudent;
+  const isAuthRoute = pathname === "/login" || pathname.startsWith("/login/");
+  const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/");
+  const isFacultyRoute = pathname === "/faculty" || pathname.startsWith("/faculty/");
+  const isStudentRoute = pathname === "/student" || pathname.startsWith("/student/");
+  const isProtectedRoute = isAdminRoute || isFacultyRoute || isStudentRoute;
 
-  // Helper to carry updated cookies over to redirect responses
   const createRedirect = (destination: string) => {
     const redirectUrl = new URL(destination, request.url);
     const redirectResponse = NextResponse.redirect(redirectUrl);
@@ -61,46 +72,47 @@ export async function middleware(request: NextRequest) {
     return redirectResponse;
   };
 
-  // Case 1: Unauthenticated user trying to access protected routes
+  // 1. Guard against unauthenticated users attempting to access protected routes
   if (!user && isProtectedRoute) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("next", pathname);
     return createRedirect(loginUrl.pathname + loginUrl.search);
   }
 
-  // Case 2: Authenticated user checking role access or accessing login
+  // 2. Role-based routing and cross-role protection for authenticated users
   if (user) {
-    // Read user role from profiles table
-    const { data: profile } = await supabase
+    const { data: profile } = (await supabase
       .from("profiles")
       .select("role, is_active")
       .eq("id", user.id)
-      .single();
+      .single()) as { data: { role?: UserRole; is_active?: boolean } | null };
 
-    const userRole = (profile?.role as UserRole) || "student";
-    const userDashboard = ROLE_DASHBOARDS[userRole] || "/student/dashboard";
-
-    // If user is deactivated, redirect to login with error
+    // If account has been explicitly deactivated, revoke access
     if (profile && profile.is_active === false) {
       await supabase.auth.signOut();
       return createRedirect("/login?error=account_deactivated");
     }
 
-    // Redirect authenticated users away from /login to their role dashboard
+    const userRole = (profile?.role || (user.user_metadata?.role as UserRole) || "student") as UserRole;
+    const userDashboard = ROLE_DASHBOARDS[userRole] || "/student/dashboard";
+
+    // Prevent authenticated users from visiting the login page
     if (isAuthRoute) {
       return createRedirect(userDashboard);
     }
 
-    // Role-based route authorization & cross-role protection
-    if (isProtectedAdmin && userRole !== "super_admin") {
+    // Guard: /admin/** allowed ONLY for super_admin
+    if (isAdminRoute && userRole !== "super_admin") {
       return createRedirect(userDashboard);
     }
 
-    if (isProtectedFaculty && userRole !== "faculty") {
+    // Guard: /faculty/** allowed ONLY for faculty
+    if (isFacultyRoute && userRole !== "faculty") {
       return createRedirect(userDashboard);
     }
 
-    if (isProtectedStudent && userRole !== "student") {
+    // Guard: /student/** allowed ONLY for student
+    if (isStudentRoute && userRole !== "student") {
       return createRedirect(userDashboard);
     }
   }
@@ -115,7 +127,7 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
-     * - static assets (.svg, .png, .jpg, etc.)
+     * - public assets (.svg, .png, .jpg, .jpeg, .gif, .webp)
      */
     "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
